@@ -114,3 +114,11 @@ desktop.ini
 
 # FastAPI runtime jobs
 api/jobs/
+
+# ============================================================
+# MLFLOW LOCAL DATABASE
+# ============================================================
+
+mlflow_tracking/*.db
+mlflow_tracking/*.db-*
+mlruns/
