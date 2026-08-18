@@ -1,9 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { FilmIcon } from "lucide-react";
-
+import { FilmIcon, Video } from "lucide-react";
+import { Link } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
 import { EmptyState, ErrorNotice, LoadingRow, Panel } from "@/components/sentinel-ui";
-import { errorMessage, useEvidence } from "@/hooks/use-sentinel";
+import { errorMessage } from "@/hooks/use-sentinel";
+import { useEvidenceRecords } from "@/lib/evidence-store";
+import { resolveMediaUrl } from "@/lib/media";
+import { ClassBadge } from "@/components/sentinel-ui";
+import { formatTimestamp } from "@/lib/sentinel";
+
 
 export const Route = createFileRoute("/evidence")({
   head: () => ({
@@ -25,48 +30,67 @@ export const Route = createFileRoute("/evidence")({
 });
 
 function EvidencePage() {
-  const evidence = useEvidence();
-  const items = evidence.data ?? [];
+  const { records: items, loading: isLoading } = useEvidenceRecords();
+
 
   return (
     <AppShell title="Evidence" description="GET /api/evidence">
       <Panel title="Evidence Clips">
-        {evidence.isLoading ? (
+        {isLoading ? (
           <LoadingRow />
-        ) : evidence.isError ? (
-          <ErrorNotice message={errorMessage(evidence.error)} />
         ) : items.length === 0 ? (
           <EmptyState
             icon={FilmIcon}
-            title="No evidence clips available."
-            description="The inference pipeline does not expose generated evidence clips through the API yet. This view will list them as soon as the backend returns them."
+            title="No evidence available"
+            description="Analyzed video evidence frames and manual captures will appear here once available from the backend or captured during analysis."
           />
         ) : (
+
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {items.map((item, index) => {
-              const url = typeof item.url === "string" ? item.url : null;
-              const id = typeof item.id === "string" ? item.id : `clip-${index + 1}`;
-              const incidentId = typeof item.incident_id === "string" ? item.incident_id : null;
+            {items.map((item) => {
+              const url = resolveMediaUrl(item.url || item.path);
               return (
-                <div key={id} className="soc-panel overflow-hidden">
-                  {url ? (
-                    <video controls preload="metadata" className="aspect-video w-full bg-background">
-                      <source src={url} />
-                    </video>
-                  ) : (
-                    <div className="flex aspect-video items-center justify-center bg-background text-xs text-muted-foreground">
-                      Clip URL not provided by backend
+                <div key={item.id} className="soc-panel overflow-hidden flex flex-col">
+                  <div className="relative aspect-video w-full bg-background group">
+                    {url ? (
+                      <img 
+                        src={url} 
+                        alt="Evidence" 
+                        className="h-full w-full object-cover transition-transform group-hover:scale-105" 
+                      />
+                    ) : (
+                      <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
+                        No image source
+                      </div>
+                    )}
+                    <div className="absolute inset-x-0 bottom-0 bg-black/60 p-2 text-[10px] text-white backdrop-blur-sm flex justify-between">
+                      <span>{item.classification.toUpperCase()}</span>
+                      <span>{item.timestamp_seconds}s</span>
                     </div>
-                  )}
-                  <div className="border-t border-border px-3 py-2">
-                    <div className="font-mono text-xs text-foreground">{id}</div>
-                    {incidentId ? (
-                      <div className="soc-label mt-0.5">Incident {incidentId}</div>
-                    ) : null}
+                  </div>
+                  <div className="p-3 space-y-2 flex-1">
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono text-[10px] text-muted-foreground">{item.id}</span>
+                      <ClassBadge value={item.classification} />
+                    </div>
+                    <div className="text-[11px] text-muted-foreground">
+                      Captured: {formatTimestamp(item.created_at)}
+                    </div>
+                    {item.incident_id && (
+                      <Link
+                        to="/incidents/$incidentId"
+                        params={{ incidentId: item.incident_id }}
+                        className="flex items-center gap-1.5 text-xs text-primary hover:underline pt-1"
+                      >
+                        <Video className="h-3 w-3" />
+                        View Incident {item.incident_id}
+                      </Link>
+                    )}
                   </div>
                 </div>
               );
             })}
+
           </div>
         )}
       </Panel>

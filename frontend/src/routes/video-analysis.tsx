@@ -8,7 +8,11 @@ import {
   XCircle,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { VideoPlayer, type VideoPlayerHandle } from "@/components/video-player";
+import { TemporalTimeline } from "@/components/temporal-timeline";
+import { resolveMediaUrl } from "@/lib/media";
+
 
 import { AppShell } from "@/components/app-shell";
 import {
@@ -89,6 +93,10 @@ function VideoAnalysisPage() {
   const [selected, setSelected] = useState<File | null>(null);
   const [selectedWindow, setSelectedWindow] = useState<AnalysisWindow | null>(null);
   const [restorable, setRestorable] = useState<string | null>(null);
+  const [currentTime, setCurrentTime] = useState(0);
+  const videoPlayerRef = useRef<VideoPlayerHandle>(null);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+
 
   useEffect(() => {
     setRestorable(loadStoredAnalysisId());
@@ -102,7 +110,28 @@ function VideoAnalysisPage() {
 
   useEffect(() => {
     setSelectedWindow(null);
-  }, [job?.analysis_id, job?.status]);
+    if (result?.video?.url) {
+      setVideoUrl(resolveMediaUrl(result.video.url));
+    } else if (result?.video?.path) {
+      setVideoUrl(resolveMediaUrl(result.video.path));
+    }
+  }, [job?.analysis_id, job?.status, result]);
+
+  useEffect(() => {
+    if (selected) {
+      const url = URL.createObjectURL(selected);
+      setVideoUrl(url);
+      return () => URL.revokeObjectURL(url);
+    }
+    return undefined;
+  }, [selected]);
+
+  const handleWindowSelect = useCallback((win: AnalysisWindow) => {
+    setSelectedWindow(win);
+    videoPlayerRef.current?.seek(win.start, true);
+  }, []);
+
+
 
   const onSubmit = async () => {
     if (!selected) return;
@@ -226,13 +255,30 @@ function VideoAnalysisPage() {
         </div>
 
         <div className="space-y-4">
+          {videoUrl ? (
+            <Panel title="Analysis Player" subtitle={selected?.name || job?.filename || ""}>
+              <VideoPlayer
+                ref={videoPlayerRef}
+                src={videoUrl}
+                filename={selected?.name || job?.filename}
+                onTime={setCurrentTime}
+              />
+              {result?.windows && (
+                <div className="mt-4 border-t border-border pt-4">
+                  <div className="soc-label mb-2">Temporal localization</div>
+                  <TemporalTimeline
+                    windows={result.windows}
+                    selected={selectedWindow}
+                    currentTime={currentTime}
+                    onSelect={handleWindowSelect}
+                  />
+                </div>
+              )}
+            </Panel>
+          ) : null}
+
           {analysis.pollError ? <ErrorNotice message={analysis.pollError} /> : null}
-          {analysis.timedOut ? (
-            <ErrorNotice message="Polling timeout — the backend has not reported a final status. Check the SentinelAI backend console." />
-          ) : null}
-          {job?.status === "failed" ? (
-            <ErrorNotice message={job.error ?? "Analysis failed without an error message."} />
-          ) : null}
+
 
           {!analysis.analysisId ? (
             <Panel title="Result">
@@ -314,11 +360,17 @@ function VideoAnalysisPage() {
                     <Link
                       to="/incidents/$incidentId"
                       params={{ incidentId: result.incident_id }}
-                      className="inline-block text-xs text-primary hover:underline"
+                      className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
                     >
-                      Open incident {result.incident_id}
+                      Open full incident report {result.incident_id}
                     </Link>
-                  ) : null}
+                  ) : (
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <CheckCircle2 className="h-3.5 w-3.5 text-normal" />
+                      Normal activity confirmed · No incident record created
+                    </div>
+                  )}
+
                 </div>
               </Panel>
 
@@ -332,15 +384,17 @@ function VideoAnalysisPage() {
                   <div className="space-y-1.5">
                     {result.windows.map((win) => {
                       const active = selectedWindow?.window === win.window;
+                      const isCurrent = currentTime >= win.start && currentTime < win.end;
                       return (
                         <button
                           key={`${win.window}-${win.start}`}
-                          onClick={() => setSelectedWindow(active ? null : win)}
+                          onClick={() => handleWindowSelect(win)}
                           className={cn(
                             "flex w-full flex-wrap items-center gap-3 rounded-md border px-3 py-2 text-left transition-colors",
                             active
                               ? "border-primary/60 bg-accent/50"
                               : "border-border hover:bg-accent/30",
+                            isCurrent && !active && "border-primary/30",
                           )}
                         >
                           <span className="font-mono text-xs text-muted-foreground">
@@ -350,6 +404,9 @@ function VideoAnalysisPage() {
                           {win.error ? (
                             <span className="text-xs text-critical">window error</span>
                           ) : null}
+                          {isCurrent && (
+                            <span className="ml-2 h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
+                          )}
                           <span className="ml-auto font-mono text-[11px] text-muted-foreground">
                             #{win.window}
                           </span>
@@ -357,41 +414,63 @@ function VideoAnalysisPage() {
                       );
                     })}
                   </div>
+
                 )}
 
                 {selectedWindow ? (
-                  <div className="mt-4 space-y-2.5 rounded-md border border-border bg-background p-3">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-mono text-xs text-muted-foreground">
-                        Window #{selectedWindow.window} · {formatSeconds(selectedWindow.start)}–
-                        {formatSeconds(selectedWindow.end)}
-                      </span>
-                      <ClassBadge value={selectedWindow.classification} />
+                  <div className="mt-4 space-y-4">
+                    <div className="space-y-2.5 rounded-md border border-border bg-background p-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-mono text-xs text-muted-foreground">
+                          Window #{selectedWindow.window} · {formatSeconds(selectedWindow.start)}–
+                          {formatSeconds(selectedWindow.end)}
+                        </span>
+                        <ClassBadge value={selectedWindow.classification} />
+                      </div>
+                      {selectedWindow.evidence ? (
+                        <div>
+                          <div className="soc-label">Evidence</div>
+                          <p className="mt-0.5 text-sm text-foreground">{selectedWindow.evidence}</p>
+                        </div>
+                      ) : null}
+                      {selectedWindow.incident_summary ? (
+                        <div>
+                          <div className="soc-label">Incident summary</div>
+                          <p className="mt-0.5 text-sm text-foreground">
+                            {selectedWindow.incident_summary}
+                          </p>
+                        </div>
+                      ) : null}
+                      {selectedWindow.processing_time !== null &&
+                      selectedWindow.processing_time !== undefined ? (
+                        <div className="text-xs text-muted-foreground">
+                          Inference time: {formatDuration(selectedWindow.processing_time)}
+                        </div>
+                      ) : null}
+                      {selectedWindow.error ? <ErrorNotice message={selectedWindow.error} /> : null}
                     </div>
-                    {selectedWindow.evidence ? (
-                      <div>
-                        <div className="soc-label">Evidence</div>
-                        <p className="mt-0.5 text-sm text-foreground">{selectedWindow.evidence}</p>
+                    {/* Evidence Gallery Placeholder - would be populated if backend returned frame URLs */}
+                    {selectedWindow.frames && selectedWindow.frames.length > 0 && (
+                      <div className="grid grid-cols-2 gap-2">
+                        {selectedWindow.frames.map((f, i) => (
+                          <div key={i} className="group relative aspect-video overflow-hidden rounded border border-border bg-muted">
+                            <img 
+                              src={resolveMediaUrl(f) || ""} 
+                              alt={`Evidence ${i}`} 
+                              className="h-full w-full object-cover transition-transform group-hover:scale-105"
+                            />
+                            <div className="absolute inset-x-0 bottom-0 bg-black/60 p-1 text-[10px] text-white">
+                              {formatSeconds(selectedWindow.start)}
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                    ) : null}
-                    {selectedWindow.incident_summary ? (
-                      <div>
-                        <div className="soc-label">Incident summary</div>
-                        <p className="mt-0.5 text-sm text-foreground">
-                          {selectedWindow.incident_summary}
-                        </p>
-                      </div>
-                    ) : null}
-                    {selectedWindow.processing_time !== null &&
-                    selectedWindow.processing_time !== undefined ? (
-                      <div className="text-xs text-muted-foreground">
-                        Inference time: {formatDuration(selectedWindow.processing_time)}
-                      </div>
-                    ) : null}
-                    {selectedWindow.error ? <ErrorNotice message={selectedWindow.error} /> : null}
+                    )}
                   </div>
                 ) : null}
+
               </Panel>
+
 
               {result.window_counts ? (
                 <Panel title="Window Classification Counts">
