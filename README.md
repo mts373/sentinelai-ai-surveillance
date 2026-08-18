@@ -1,212 +1,143 @@
-\# SentinelAI — AI-Powered Incident Intelligence
+# Vision Language Model Based Incident Intelligence Platform for Smart Surveillance and Emergency Response
 
+**SentinelAI** is an AI-powered incident intelligence platform that transforms traditional CCTV footage into structured surveillance intelligence using Vision-Language Models.
 
+The current MVP analyzes uploaded surveillance videos using **Qwen2.5-VL**, performs temporal window-based analysis, classifies selected incidents, generates incident summaries and threat levels, extracts visual evidence, creates structured incidents, supports human review, routes emergency responses, and presents the results through a SOC-style web dashboard.
 
-SentinelAI is an AI-powered surveillance prototype that transforms CCTV video into structured incident intelligence using a Vision-Language Model.
+---
 
+## 1. Project Status
 
+**Current MVP: Working**
 
-The system processes uploaded surveillance video, performs memory-controlled video preprocessing and temporal analysis, classifies the observed activity, aggregates window-level predictions, and exposes the analysis through a FastAPI backend connected to a web dashboard.
+The implemented prototype currently supports:
 
+- CCTV/video upload
+- Memory-controlled video preprocessing
+- Temporal video windowing
+- Qwen2.5-VL visual analysis
+- LoRA/QLoRA-based inference
+- Window-level classification
+- Video-level temporal aggregation
+- Incident generation
+- Threat-level estimation
+- AI-generated incident summaries
+- Visual evidence frame extraction
+- Evidence API
+- Synchronized video playback
+- Temporal analysis timeline
+- Evidence gallery
+- Incident management
+- Human review and correction records
+- Emergency response routing
+- Email notification integration through Resend
+- FastAPI backend
+- SOC-style web dashboard
+- MLflow experiment tracking
+- Held-out evaluation
 
+### Current AI Classes
 
-\---
+- **Normal**
+- **Fire**
+- **Fight**
+- **Road Accident**
 
+> Unauthorized Entry, suspicious activity, crowd panic, and other incident categories are planned future extensions and are not currently completed model classes.
 
+---
 
-\## Project Status
+# 2. Problem
 
+Traditional CCTV systems are primarily passive recording systems. They continuously store video but depend heavily on human operators to monitor multiple camera feeds.
 
+In practical environments, operators cannot continuously watch dozens or hundreds of cameras. Important incidents such as fires, road accidents, physical fights, unauthorized intrusions, and suspicious activities can therefore be missed or detected too late.
 
-\*\*Current MVP:\*\* Working
+Delayed detection can increase:
 
+- Emergency response time
+- Property damage
+- Public safety risks
+- Operational costs
+- Dependence on continuous human monitoring
 
+Most conventional surveillance systems focus on recording, playback, or basic object detection rather than understanding complex real-world events.
 
-The current prototype supports:
+---
 
+# 3. Proposed Solution
 
+SentinelAI explores an AI-assisted surveillance approach in which Vision-Language Models analyze surveillance video and transform visual observations into structured incident intelligence.
 
-\- CCTV video upload
+The target platform is designed to:
 
-\- Automatic video preprocessing
+- Analyze surveillance video
+- Understand ongoing activities
+- Classify selected incidents
+- Estimate threat severity
+- Generate incident summaries
+- Identify relevant temporal sections
+- Generate visual evidence
+- Display incidents through a centralized dashboard
+- Support human verification
+- Route incidents to appropriate response departments
+- Provide notification capabilities
 
-\- Temporal video windowing
+The current MVP focuses on uploaded-video analysis while providing an architecture that can be extended to live CCTV streams.
 
-\- Qwen2.5-VL based visual analysis
+---
 
-\- LoRA/QLoRA fine-tuned inference
-
-\- Four classification categories
-
-\- Window-level inference
-
-\- Video-level result aggregation
-
-\- FastAPI backend
-
-\- Web dashboard integration
-
-\- MLflow experiment tracking
-
-\- Fresh held-out evaluation
-
-
-
-\### Supported AI classes
-
-
-
-\- Normal
-
-\- Fire
-
-\- Fight
-
-\- Road Accident
-
-
-
-\*\*Unauthorized Entry\*\* is part of the planned future scope and is not currently represented as a completed model class.
-
-
-
-\---
-
-
-
-\# 1. Problem
-
-
-
-Traditional CCTV systems primarily record video and depend on human operators to continuously monitor multiple camera feeds.
-
-
-
-This creates a practical limitation: important incidents can be missed when operators are monitoring many cameras simultaneously.
-
-
-
-SentinelAI explores an AI-assisted approach in which surveillance video is analyzed automatically to identify selected incidents and provide structured information to the operator.
-
-
-
-\---
-
-
-
-\# 2. Proposed Solution
-
-
-
-SentinelAI uses a Vision-Language Model to analyze surveillance video instead of relying only on conventional object detection.
-
-
-
-The current pipeline is:
-
-
+# 4. System Architecture
 
 ```text
-
 CCTV / Uploaded Video
-
-&#x20;       │
-
-&#x20;       ▼
-
+        │
+        ▼
 Video Preprocessing
-
-&#x20;       │
-
-&#x20;       ├── Resolution normalization
-
-&#x20;       ├── FPS normalization
-
-&#x20;       └── Memory-controlled processing
-
-&#x20;       │
-
-&#x20;       ▼
-
+        │
+        ├── Resolution normalization
+        ├── FPS normalization
+        └── Memory-controlled processing
+        │
+        ▼
 Temporal Windowing
-
-&#x20;       │
-
-&#x20;       └── 10-second analysis windows
-
-&#x20;       │
-
-&#x20;       ▼
-
+        │
+        └── Approximately 10-second windows
+        │
+        ▼
 Qwen2.5-VL + LoRA
-
-&#x20;       │
-
-&#x20;       ▼
-
+        │
+        ▼
 Window-Level Classification
-
-&#x20;       │
-
-&#x20;       ├── Normal
-
-&#x20;       ├── Fire
-
-&#x20;       ├── Fight
-
-&#x20;       └── Road Accident
-
-&#x20;       │
-
-&#x20;       ▼
-
+        │
+        ├── Normal
+        ├── Fire
+        ├── Fight
+        └── Road Accident
+        │
+        ▼
 Temporal / Video-Level Aggregation
-
-&#x20;       │
-
-&#x20;       ▼
-
+        │
+        ▼
+Incident Intelligence
+        │
+        ├── Classification
+        ├── Threat Level
+        ├── Summary
+        ├── Recommended Action
+        └── Temporal Episodes
+        │
+        ▼
+Visual Evidence Extraction
+        │
+        ▼
 FastAPI Backend
-
-&#x20;       │
-
-&#x20;       ▼
-
+        │
+        ├── Incident API
+        ├── Evidence API
+        ├── Human Review API
+        ├── Analytics API
+        └── Notification Integration
+        │
+        ▼
 SentinelAI Web Dashboard
-
-# 13. Web Dashboard
-
-SentinelAI uses a web dashboard as the user-facing interface for the MVP.
-
-The dashboard communicates with the FastAPI backend to submit videos and retrieve analysis results.
-
-The current backend integration follows:
-
-```text
-Web Dashboard
-      │
-      │ POST /api/analyze-video
-      ▼
-FastAPI Backend
-      │
-      ▼
-Video Upload
-      │
-      ▼
-video_preprocessor.py
-      │
-      ▼
-Temporal Manifest
-      │
-      ▼
-inference_engine.py
-      │
-      ▼
-inference_results.json
-      │
-      ▼
-FastAPI
-      │
-      ▼
-Web Dashboard
-
