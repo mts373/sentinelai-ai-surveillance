@@ -1,15 +1,36 @@
 import json
 import os
 import subprocess
+import sys
 import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import cv2
 import torch
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+
+# ============================================================
+# PROJECT ROOT / IMPORT PATH
+# ============================================================
+# This makes `src` importable both when this module is imported
+# with `from api.main import app` and when launched directly with
+# `python .\api\main.py` from the project root.
+# ============================================================
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+
+from src.notification_service import (
+    dispatch_incident_response,
+)
 
 
 # ============================================================
@@ -28,9 +49,13 @@ from fastapi.middleware.cors import CORSMiddleware
 #       ↓
 # inference_results.json
 #       ↓
-# FastAPI
+# FastAPI aggregation
 #       ↓
-# Lovable
+# Evidence extraction
+#       ↓
+# Emergency response
+#       ↓
+# Lovable Dashboard
 #
 # IMPORTANT:
 # This API does NOT duplicate Qwen inference.
@@ -41,8 +66,6 @@ from fastapi.middleware.cors import CORSMiddleware
 # ============================================================
 # PATHS
 # ============================================================
-
-PROJECT_ROOT = Path(r"C:\SentinelAI_Qwen")
 
 PYTHON_EXE = (
     PROJECT_ROOT
@@ -73,6 +96,12 @@ JOB_ROOT = (
     PROJECT_ROOT
     / "api"
     / "jobs"
+)
+
+EVIDENCE_ROOT = (
+    PROJECT_ROOT
+    / "api"
+    / "evidence"
 )
 
 
@@ -108,6 +137,11 @@ UPLOAD_ROOT.mkdir(
 )
 
 JOB_ROOT.mkdir(
+    parents=True,
+    exist_ok=True,
+)
+
+EVIDENCE_ROOT.mkdir(
     parents=True,
     exist_ok=True,
 )
@@ -182,6 +216,7 @@ def set_job(
     with JOBS_LOCK:
 
         if job_id in JOBS:
+
             JOBS[job_id].update(
                 updates
             )
@@ -329,17 +364,6 @@ def run_process(
     # --------------------------------------------------------
     # WINDOWS UTF-8 FIX
     # --------------------------------------------------------
-    #
-    # Your previous FastAPI test failed inside:
-    #
-    # qwen_engine.py
-    #
-    # with:
-    #
-    # UnicodeEncodeError: 'charmap' codec can't encode...
-    #
-    # Force the child Python process to use UTF-8.
-    # --------------------------------------------------------
 
     env = os.environ.copy()
 
@@ -358,21 +382,13 @@ def run_process(
     process = subprocess.Popen(
         command,
         cwd=str(PROJECT_ROOT),
-
         stdout=subprocess.PIPE,
-
         stderr=subprocess.STDOUT,
-
         text=True,
-
         encoding="utf-8",
-
         errors="replace",
-
         bufsize=1,
-
         creationflags=creationflags,
-
         env=env,
     )
 
@@ -481,6 +497,7 @@ def normalize_result(
             item,
             dict,
         ):
+
             continue
 
         classification = str(
@@ -534,38 +551,49 @@ def normalize_result(
                     "Normal"
                 )
 
+        try:
+            start = float(
+                item.get(
+                    "start",
+                    0.0,
+                )
+            )
+        except (
+            TypeError,
+            ValueError,
+        ):
+            start = 0.0
+
+        try:
+            end = float(
+                item.get(
+                    "end",
+                    0.0,
+                )
+            )
+        except (
+            TypeError,
+            ValueError,
+        ):
+            end = start
+
         windows.append(
             {
                 "window": item.get(
                     "window",
                     index,
                 ),
-
-                "start": float(
-                    item.get(
-                        "start",
-                        0.0,
-                    )
-                ),
-
-                "end": float(
-                    item.get(
-                        "end",
-                        0.0,
-                    )
-                ),
-
+                "start": start,
+                "end": end,
                 "classification": (
                     classification
                 ),
-
                 "evidence": str(
                     item.get(
                         "evidence",
                         "",
                     )
                 ),
-
                 "incident_summary": str(
                     item.get(
                         "incident_summary",
@@ -575,13 +603,11 @@ def normalize_result(
                     )
                     or ""
                 ),
-
                 "processing_time": (
                     item.get(
                         "processing_time"
                     )
                 ),
-
                 "error": item.get(
                     "error"
                 ),
@@ -822,6 +848,238 @@ def normalize_result(
 
 
 # ============================================================
+# EVIDENCE FRAME EXTRACTION
+# ============================================================
+
+def extract_evidence_frame(
+    video_path: Path,
+    analysis_id: str,
+    timestamp_seconds: float,
+    label: str,
+) -> str | None:
+    """
+    Extract one representative frame from the original
+    uploaded video.
+
+    The midpoint of the detected temporal window is used
+    as the representative evidence frame.
+
+    Returns:
+        API URL of the generated evidence image,
+        or None if extraction fails.
+    """
+
+    if not video_path.exists():
+        return None
+
+    safe_analysis_id = Path(
+        analysis_id
+    ).name
+
+    evidence_dir = (
+        EVIDENCE_ROOT
+        / safe_analysis_id
+    )
+
+    evidence_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    safe_label = (
+        str(label)
+        .lower()
+        .replace(" ", "_")
+        .replace("/", "_")
+        .replace("\\", "_")
+    )
+
+    # Keep filename deterministic.
+    timestamp_ms = max(
+        0,
+        int(
+            timestamp_seconds
+            * 1000
+        ),
+    )
+
+    filename = (
+        f"{safe_label}_"
+        f"{timestamp_ms}ms.jpg"
+    )
+
+    output_path = (
+        evidence_dir
+        / filename
+    )
+
+    # Don't regenerate existing frames.
+    if output_path.exists():
+
+        return (
+            f"/api/evidence/"
+            f"{safe_analysis_id}/"
+            f"{filename}"
+        )
+
+    capture = cv2.VideoCapture(
+        str(video_path)
+    )
+
+    if not capture.isOpened():
+        return None
+
+    try:
+
+        capture.set(
+            cv2.CAP_PROP_POS_MSEC,
+            float(timestamp_ms),
+        )
+
+        success, frame = (
+            capture.read()
+        )
+
+        if (
+            not success
+            or frame is None
+        ):
+            return None
+
+        write_success = (
+            cv2.imwrite(
+                str(output_path),
+                frame,
+                [
+                    cv2.IMWRITE_JPEG_QUALITY,
+                    90,
+                ],
+            )
+        )
+
+        if not write_success:
+            return None
+
+        return (
+            f"/api/evidence/"
+            f"{safe_analysis_id}/"
+            f"{filename}"
+        )
+
+    except Exception:
+        # Evidence generation must NEVER
+        # break the AI analysis itself.
+        return None
+
+    finally:
+        capture.release()
+
+
+# ============================================================
+# GENERATE VISUAL EVIDENCE
+# ============================================================
+
+def generate_visual_evidence(
+    result: dict[str, Any],
+    video_path: Path,
+    analysis_id: str,
+) -> None:
+    """
+    Attach visual evidence metadata to every
+    non-Normal temporal window.
+
+    This does not modify the AI classification.
+    """
+
+    windows = result.get(
+        "windows",
+        [],
+    )
+
+    for window in windows:
+
+        classification = (
+            window.get(
+                "classification",
+                "Normal",
+            )
+        )
+
+        # No evidence image needed
+        # for Normal windows.
+        if classification == "Normal":
+
+            window[
+                "evidence_frame_url"
+            ] = None
+
+            window[
+                "evidence_timestamp"
+            ] = None
+
+            continue
+
+        try:
+
+            start = float(
+                window.get(
+                    "start",
+                    0.0,
+                )
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+
+            start = 0.0
+
+        try:
+
+            end = float(
+                window.get(
+                    "end",
+                    start,
+                )
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+
+            end = start
+
+        # Protect against invalid temporal ranges.
+        if end < start:
+            end = start
+
+        # Representative frame:
+        # midpoint of the temporal window.
+        timestamp = (
+            start + end
+        ) / 2.0
+
+        evidence_url = (
+            extract_evidence_frame(
+                video_path=video_path,
+                analysis_id=analysis_id,
+                timestamp_seconds=timestamp,
+                label=classification,
+            )
+        )
+
+        window[
+            "evidence_frame_url"
+        ] = evidence_url
+
+        window[
+            "evidence_timestamp"
+        ] = timestamp
+
+
+# ============================================================
 # SAVE RESULT
 # ============================================================
 
@@ -895,15 +1153,12 @@ def process_analysis(
             )
 
             preprocess_command = [
-
                 str(
                     PYTHON_EXE
                 ),
-
                 str(
                     PREPROCESSOR
                 ),
-
                 str(
                     input_video
                 ),
@@ -954,15 +1209,12 @@ def process_analysis(
             )
 
             inference_command = [
-
                 str(
                     PYTHON_EXE
                 ),
-
                 str(
                     INFERENCE_ENGINE
                 ),
-
                 str(
                     manifest
                 ),
@@ -1019,6 +1271,33 @@ def process_analysis(
         result[
             "analysis_id"
         ] = job_id
+
+        # ====================================================
+        # VISUAL EVIDENCE
+        # ====================================================
+        #
+        # This runs AFTER Qwen inference and AFTER the GPU lock
+        # has been released.
+        #
+        # It extracts representative JPG frames from the
+        # original uploaded video for anomaly windows.
+        # ====================================================
+
+        set_job(
+            job_id,
+            stage="Evidence Extraction",
+            progress=90,
+            message=(
+                "Generating visual evidence "
+                "for detected anomalies."
+            ),
+        )
+
+        generate_visual_evidence(
+            result=result,
+            video_path=input_video,
+            analysis_id=job_id,
+        )
 
         # ====================================================
         # INCIDENT CREATION
@@ -1082,6 +1361,22 @@ def process_analysis(
             INCIDENTS[
                 incident_id
             ] = incident
+
+            # ====================================================
+            # EMERGENCY RESPONSE DISPATCH
+            # ====================================================
+            #
+            # Existing tested notification service.
+            # DO NOT replace with a mock.
+            # ====================================================
+
+            response = dispatch_incident_response(
+                incident
+            )
+
+            incident[
+                "response"
+            ] = response
 
         result[
             "incident_id"
@@ -1441,6 +1736,67 @@ def analysis_status(
 
 
 # ============================================================
+# ANALYZED VIDEO
+# ============================================================
+
+@app.get(
+    "/api/analyze-video/{analysis_id}/video"
+)
+def serve_analyzed_video(
+    analysis_id: str,
+):
+    """
+    Serve the original uploaded video for
+    synchronized dashboard playback.
+    """
+
+    safe_analysis_id = Path(
+        analysis_id
+    ).name
+
+    upload_dir = (
+        UPLOAD_ROOT
+        / safe_analysis_id
+    )
+
+    if not upload_dir.exists():
+
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Uploaded video not found."
+            ),
+        )
+
+    video_files = [
+        path
+        for path in upload_dir.iterdir()
+        if (
+            path.is_file()
+            and path.suffix.lower()
+            in ALLOWED_EXTENSIONS
+        )
+    ]
+
+    if not video_files:
+
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Uploaded video not found."
+            ),
+        )
+
+    # There should normally be one uploaded
+    # video per analysis ID.
+    video_path = video_files[0]
+
+    return FileResponse(
+        video_path
+    )
+
+
+# ============================================================
 # INCIDENTS
 # ============================================================
 
@@ -1538,13 +1894,300 @@ def resolve_incident(
 @app.get(
     "/api/evidence"
 )
-def list_evidence():
+def list_evidence(
+    analysis_id: str | None = Query(
+        default=None
+    ),
+    incident_id: str | None = Query(
+        default=None
+    ),
+):
+    """
+    Return real visual evidence generated
+    from analyzed videos.
+    """
 
-    # Do NOT fabricate evidence URLs.
-    # Your current inference pipeline does not yet expose
-    # generated evidence clips through the API.
+    results: list[
+        dict[str, Any]
+    ] = []
 
-    return []
+    if not EVIDENCE_ROOT.exists():
+        return results
+
+    if analysis_id:
+
+        safe_analysis_id = Path(
+            analysis_id
+        ).name
+
+        analysis_dirs = [
+            EVIDENCE_ROOT
+            / safe_analysis_id
+        ]
+
+    else:
+
+        try:
+
+            analysis_dirs = list(
+                EVIDENCE_ROOT.iterdir()
+            )
+
+        except OSError:
+
+            return results
+
+    for analysis_dir in analysis_dirs:
+
+        if not analysis_dir.exists():
+            continue
+
+        if not analysis_dir.is_dir():
+            continue
+
+        current_analysis_id = (
+            analysis_dir.name
+        )
+
+        result_path = (
+            JOB_ROOT
+            / current_analysis_id
+            / "result.json"
+        )
+
+        if not result_path.exists():
+            continue
+
+        try:
+
+            result = load_json(
+                result_path
+            )
+
+        except Exception:
+
+            continue
+
+        current_incident_id = (
+            result.get(
+                "incident_id"
+            )
+        )
+
+        if (
+            incident_id
+            and current_incident_id
+            != incident_id
+        ):
+
+            continue
+
+        video = (
+            result.get(
+                "video"
+            )
+            or {}
+        )
+
+        video_filename = (
+            video.get(
+                "filename"
+            )
+            or ""
+        )
+
+        windows = result.get(
+            "windows",
+            [],
+        )
+
+        for window_index, window in enumerate(
+            windows
+        ):
+
+            classification = (
+                window.get(
+                    "classification",
+                    "Normal",
+                )
+            )
+
+            if classification == "Normal":
+                continue
+
+            evidence_url = (
+                window.get(
+                    "evidence_frame_url"
+                )
+            )
+
+            if not evidence_url:
+                continue
+
+            timestamp = (
+                window.get(
+                    "evidence_timestamp"
+                )
+            )
+
+            if timestamp is None:
+
+                try:
+
+                    start = float(
+                        window.get(
+                            "start",
+                            0,
+                        )
+                    )
+
+                    end = float(
+                        window.get(
+                            "end",
+                            start,
+                        )
+                    )
+
+                    timestamp = (
+                        start + end
+                    ) / 2.0
+
+                except (
+                    TypeError,
+                    ValueError,
+                ):
+
+                    timestamp = 0.0
+
+            results.append(
+                {
+                    "id": (
+                        f"EV-"
+                        f"{current_analysis_id}-"
+                        f"{window_index}"
+                    ),
+
+                    "analysis_id": (
+                        current_analysis_id
+                    ),
+
+                    "incident_id": (
+                        current_incident_id
+                    ),
+
+                    "video_filename": (
+                        video_filename
+                    ),
+
+                    "timestamp_seconds": (
+                        timestamp
+                    ),
+
+                    "start": (
+                        window.get(
+                            "start",
+                            0,
+                        )
+                    ),
+
+                    "end": (
+                        window.get(
+                            "end",
+                            0,
+                        )
+                    ),
+
+                    "classification": (
+                        classification
+                    ),
+
+                    "evidence": (
+                        window.get(
+                            "evidence",
+                            "",
+                        )
+                    ),
+
+                    "incident_summary": (
+                        window.get(
+                            "incident_summary",
+                            "",
+                        )
+                    ),
+
+                    "image_url": (
+                        evidence_url
+                    ),
+
+                    "url": (
+                        evidence_url
+                    ),
+
+                    "kind": "frame",
+
+                    "source": "backend",
+
+                    "created_at": utc_now(),
+                }
+            )
+
+    return results
+
+
+# ============================================================
+# SERVE EVIDENCE IMAGE
+# ============================================================
+
+@app.get(
+    "/api/evidence/{analysis_id}/{filename}"
+)
+def serve_evidence_image(
+    analysis_id: str,
+    filename: str,
+):
+    """
+    Serve a generated evidence JPEG.
+
+    Path traversal is prevented by reducing both
+    path components to their filenames.
+    """
+
+    safe_analysis_id = Path(
+        analysis_id
+    ).name
+
+    safe_filename = Path(
+        filename
+    ).name
+
+    target = (
+        EVIDENCE_ROOT
+        / safe_analysis_id
+        / safe_filename
+    )
+
+    if not target.exists():
+
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Evidence frame not found."
+            ),
+        )
+
+    if not target.is_file():
+
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Evidence frame not found."
+            ),
+        )
+
+    return FileResponse(
+        target,
+        media_type="image/jpeg",
+    )
 
 
 # ============================================================
@@ -1594,12 +2237,8 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run(
-
         "main:app",
-
         host="0.0.0.0",
-
         port=8000,
-
         reload=False,
     )

@@ -115,7 +115,35 @@ export const api = {
       method: "POST",
     }),
 
-  evidence: () => request<EvidenceItem[]>("/api/evidence"),
+  evidence: (filters?: { analysis_id?: string; incident_id?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.analysis_id) params.append("analysis_id", filters.analysis_id);
+    if (filters?.incident_id) params.append("incident_id", filters.incident_id);
+    const query = params.toString();
+    return request<EvidenceItem[]>(`/api/evidence${query ? `?${query}` : ""}`);
+  },
+
+  saveEvidence: (evidence: Omit<EvidenceItem, "id" | "created_at">) =>
+    request<EvidenceItem>("/api/evidence", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(evidence),
+    }),
+
+  updateHumanReview: (
+    analysisId: string,
+    review: {
+      verdict: "correct" | "incorrect";
+      corrected_label: string | null;
+      notes: string | null;
+    },
+  ) =>
+    request<EvidenceItem>(`/api/analyze-video/${encodeURIComponent(analysisId)}/review`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(review),
+    }),
+
 
   analytics: () => request<Analytics>("/api/analytics"),
 };
